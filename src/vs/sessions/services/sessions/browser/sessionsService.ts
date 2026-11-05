@@ -1189,17 +1189,22 @@ export class SessionsService extends Disposable implements ISessionsService {
 		if (!session) {
 			throw new Error(`Cannot move a chat from unavailable session '${sessionId}'`);
 		}
+		// Where the chat shows outside of the grid, such as a chat window it is dragged out of
+		const shownBy = this.chatHostOpenerService.getOpenerOf(chatResource);
+		const shownResource = chatResource;
 		this._cancelRestore();
 		const token = this._startOpenSession();
-		if (!this._visibility.getRenderedGridSlots().some(slot => slot.id === referenceSlotId)) {
+		const isTargetValid = () => this._visibility.getRenderedGridSlots().some(slot => slot.id === referenceSlotId);
+		if (!isTargetValid()) {
 			return;
 		}
+		let prepared: ISession[] | undefined;
 		if (!this._visibility.gridSessions.get().some(visible => visible?.sessionId === sessionId)) {
 			const resolved = await this._resolveSessionForOpen(session, chatResource);
 			session = resolved.session;
 			chatResource = resolved.chatUri ?? chatResource;
-			const prepared = await this.prepareGridSessions([session], token);
-			if (!prepared || token.isCancellationRequested || !this.areGridSessionsCurrent(prepared) || !this._visibility.getRenderedGridSlots().some(slot => slot.id === referenceSlotId)) {
+			prepared = await this.prepareGridSessions([session], token);
+			if (!prepared || token.isCancellationRequested || !this.areGridSessionsCurrent(prepared) || !isTargetValid()) {
 				return;
 			}
 			session = prepared[0];
@@ -1207,6 +1212,18 @@ export class SessionsService extends Disposable implements ISessionsService {
 		const chat = session.chats.get().find(chat => this.uriIdentityService.extUri.isEqual(chat.resource, chatResource));
 		if (!chat) {
 			throw new Error(`Cannot move unavailable chat '${chatResource}'`);
+		}
+		// Once the grid can take it, the chat leaves where it shows: its window closes with its last chat. While it cannot
+		// leave, such as when its close is vetoed, it stays there; when the grid changed as it left, it goes back there.
+		if (shownBy) {
+			const closed = await shownBy.close(shownResource);
+			if (!closed) {
+				return;
+			}
+			if (token.isCancellationRequested || !isTargetValid() || (prepared && !this.areGridSessionsCurrent(prepared))) {
+				await closed.restore();
+				return;
+			}
 		}
 		if (this.uriIdentityService.extUri.isEqual(chat.resource, session.mainChat.get().resource)) {
 			const slots = this._visibility.getRenderedGridSlots();
